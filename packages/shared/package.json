@@ -1,0 +1,19 @@
+{
+  "name": "@solidaria/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tipos e schemas (Zod) compartilhados entre apps/web e apps/api",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}

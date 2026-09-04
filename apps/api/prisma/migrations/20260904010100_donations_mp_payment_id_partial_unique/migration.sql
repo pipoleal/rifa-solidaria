@@ -1,0 +1,12 @@
+-- Migration escrita manualmente (não gerada por `prisma migrate dev`).
+--
+-- Motivo: índice único parcial (com cláusula WHERE) só é suportado pelo Prisma
+-- como Preview feature (`partialIndexes`) na versão 7.10.0 pinada neste projeto —
+-- GA apenas a partir do Prisma 8, ainda em release candidate. Para não depender de
+-- uma feature em preview numa constraint crítica de consistência financeira
+-- (idempotência do webhook do Mercado Pago), o índice é criado via SQL puro aqui.
+--
+-- Este índice NÃO está declarado no schema.prisma (mpPaymentId é um campo comum,
+-- sem @unique). Um `prisma migrate dev` futuro não deve tentar removê-lo por
+-- divergência — ver README para o registro dessa decisão.
+CREATE UNIQUE INDEX "donations_mp_payment_id_unique" ON "donations" ("mp_payment_id") WHERE "mp_payment_id" IS NOT NULL;

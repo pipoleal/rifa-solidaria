@@ -1,0 +1,30 @@
+{
+  "name": "solidaria",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Campanha de doação solidária para apoio a uma atleta — monorepo (frontend, backend, pacote compartilhado)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "build": "npm run build --workspace=packages/shared && npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "typecheck": "npm run build --workspace=packages/shared && npm run typecheck --workspaces --if-present",
+    "test": "npm run build --workspace=packages/shared && npm run test --workspace=apps/api && npm run test --workspace=apps/web"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.9.1",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.12.0",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.69.0"
+  }
+}
