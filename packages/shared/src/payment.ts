@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const MIN_DONATION_AMOUNT_CENTS = 500; // R$ 5,00
+// TEMPORÁRIO para teste de webhook — reverter para 500 (R$ 5,00) depois.
+export const MIN_DONATION_AMOUNT_CENTS = 1; // R$ 0,01
 export const MAX_DONATION_AMOUNT_CENTS = 5_000_000; // R$ 50.000,00 — limite defensivo, ajustável
 
 export const createPaymentRequestSchema = z.object({
