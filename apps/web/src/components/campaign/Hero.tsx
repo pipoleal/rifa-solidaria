@@ -13,6 +13,13 @@ export function Hero({ campaign }: { campaign: CampaignResponse }) {
           {campaign.title}
         </h1>
         <p className="mt-4 text-lg text-slate-600">{summary}</p>
+        {campaign.coverImageUrl && (
+          <img
+            src={campaign.coverImageUrl}
+            alt={campaign.title}
+            className="mx-auto mt-8 h-64 w-full max-w-2xl rounded-2xl object-cover shadow-md sm:h-80"
+          />
+        )}
         <a
           href="#doar"
           className="focus-ring mt-8 inline-block rounded-full bg-emerald-600 px-8 py-3 text-base font-semibold text-white transition hover:bg-emerald-700"
