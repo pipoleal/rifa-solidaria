@@ -2,22 +2,28 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/mercadopago.js", () => ({
-  preferenceClient: { create: vi.fn() },
-  paymentClient: { get: vi.fn() },
+  paymentClient: { create: vi.fn(), get: vi.fn() },
 }));
 
 const { buildApp } = await import("../app.js");
 const { prisma } = await import("../lib/prisma.js");
-const { preferenceClient } = await import("../lib/mercadopago.js");
+const { paymentClient } = await import("../lib/mercadopago.js");
 
 describe("[integração real] POST /api/payments/create", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
 
   beforeEach(async () => {
-    vi.mocked(preferenceClient.create).mockReset();
-    vi.mocked(preferenceClient.create).mockResolvedValue({
-      id: "pref-1",
-      init_point: "https://mercadopago.com/checkout/pref-1",
+    vi.mocked(paymentClient.create).mockReset();
+    vi.mocked(paymentClient.create).mockResolvedValue({
+      id: 123456789,
+      status: "pending",
+      point_of_interaction: {
+        transaction_data: {
+          qr_code: "00020126-fake-copia-e-cola",
+          qr_code_base64: "ZmFrZQ==",
+          ticket_url: "https://www.mercadopago.com.br/payments/123456789/ticket",
+        },
+      },
       api_response: { status: 201, headers: ["", []] as [string, string[]] },
     });
     app = buildApp();
@@ -28,7 +34,7 @@ describe("[integração real] POST /api/payments/create", () => {
     await app.close();
   });
 
-  it("cria a Donation de verdade no Postgres e retorna o initPoint", async () => {
+  it("cria a Donation de verdade no Postgres e retorna os dados do Pix", async () => {
     const campaign = await prisma.campaign.create({
       data: {
         title: "Campanha",
@@ -53,10 +59,10 @@ describe("[integração real] POST /api/payments/create", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    const body = response.json() as { donationId: string; initPoint: string };
+    const body = response.json() as { donationId: string; qrCode: string };
     const stored = await prisma.donation.findUniqueOrThrow({ where: { id: body.donationId } });
     expect(stored.status).toBe("PENDING");
-    expect(stored.mpPreferenceId).toBe("pref-1");
+    expect(stored.mpPaymentId).toBe("123456789");
   });
 
   it("concorrência real: 10 requisições simultâneas com o mesmo clientRequestId criam só 1 linha (constraint UNIQUE real do Postgres, não simulada)", async () => {

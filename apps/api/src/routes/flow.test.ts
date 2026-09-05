@@ -8,12 +8,11 @@ vi.mock("../lib/prisma.js", async () => {
   return { prisma: fake.fakePrisma, __fake: fake };
 });
 vi.mock("../lib/mercadopago.js", () => ({
-  preferenceClient: { create: vi.fn() },
-  paymentClient: { get: vi.fn() },
+  paymentClient: { create: vi.fn(), get: vi.fn() },
 }));
 
 const { buildApp } = await import("../app.js");
-const { preferenceClient, paymentClient } = await import("../lib/mercadopago.js");
+const { paymentClient } = await import("../lib/mercadopago.js");
 const { __fake: fake } = (await import("../lib/prisma.js")) as unknown as {
   __fake: ReturnType<typeof createFakePrisma>;
 };
@@ -35,7 +34,7 @@ describe("Fluxo: campanha -> formulário -> pagamento -> webhook", () => {
 
   beforeEach(async () => {
     fake.reset();
-    vi.mocked(preferenceClient.create).mockReset();
+    vi.mocked(paymentClient.create).mockReset();
     vi.mocked(paymentClient.get).mockReset();
     app = buildApp();
     await app.ready();
@@ -67,9 +66,16 @@ describe("Fluxo: campanha -> formulário -> pagamento -> webhook", () => {
     expect(campaignBody.currentAmount).toBe(0);
 
     // 2) O formulário envia a doação usando o campaignId acima.
-    vi.mocked(preferenceClient.create).mockResolvedValue({
-      id: "pref-1",
-      init_point: "https://mercadopago.com/checkout/pref-1",
+    vi.mocked(paymentClient.create).mockResolvedValue({
+      id: 999999999,
+      status: "pending",
+      point_of_interaction: {
+        transaction_data: {
+          qr_code: "00020126-fake-copia-e-cola",
+          qr_code_base64: "ZmFrZQ==",
+          ticket_url: "https://www.mercadopago.com.br/payments/999999999/ticket",
+        },
+      },
       api_response: { status: 201, headers: ["", []] as [string, string[]] },
     });
     const clientRequestId = randomUUID();
@@ -86,11 +92,11 @@ describe("Fluxo: campanha -> formulário -> pagamento -> webhook", () => {
       },
     });
     expect(paymentResponse.statusCode).toBe(201);
-    const { donationId, initPoint } = paymentResponse.json() as {
+    const { donationId, qrCode } = paymentResponse.json() as {
       donationId: string;
-      initPoint: string;
+      qrCode: string;
     };
-    expect(initPoint).toBe("https://mercadopago.com/checkout/pref-1");
+    expect(qrCode).toBe("00020126-fake-copia-e-cola");
 
     // 3) Antes da confirmação do MP, a meta ainda não mudou (só doações
     // APPROVED contam).

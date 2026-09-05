@@ -3,9 +3,11 @@ import {
   campaignResponseSchema,
   createPaymentRequestSchema,
   createPaymentResponseSchema,
+  donationStatusResponseSchema,
   type CampaignResponse,
   type CreatePaymentRequest,
   type CreatePaymentResponse,
+  type DonationStatusResponse,
 } from "@solidaria/shared";
 
 export class ApiError extends Error {
@@ -67,4 +69,24 @@ export async function createPayment(input: CreatePaymentRequest): Promise<Create
   }
 
   return createPaymentResponseSchema.parse(data);
+}
+
+export async function getDonationStatus(donationId: string): Promise<DonationStatusResponse> {
+  const response = await fetch(apiUrl(`/api/donations/${donationId}/status`));
+
+  const data: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const parsedError = apiErrorResponseSchema.safeParse(data);
+    if (parsedError.success) {
+      throw new ApiError(
+        parsedError.data.error.code,
+        parsedError.data.error.message,
+        response.status,
+      );
+    }
+    throw new ApiError("UNKNOWN_ERROR", "Erro inesperado ao consultar a doação.", response.status);
+  }
+
+  return donationStatusResponseSchema.parse(data);
 }

@@ -2,13 +2,15 @@ import {
   apiErrorResponseSchema,
   createPaymentRequestSchema,
   createPaymentResponseSchema,
+  donationStatusResponseSchema,
 } from "@solidaria/shared";
 import rateLimit from "@fastify/rate-limit";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { MercadoPagoError } from "mercadopago";
+import { z } from "zod";
 import { DonationStatus } from "../generated/prisma/enums.js";
 import { findOrCreateDonation } from "../lib/donations.js";
-import { preferenceClient } from "../lib/mercadopago.js";
+import { paymentClient } from "../lib/mercadopago.js";
 import { prisma } from "../lib/prisma.js";
 
 const TERMINAL_STATUSES: readonly DonationStatus[] = [
@@ -18,25 +20,39 @@ const TERMINAL_STATUSES: readonly DonationStatus[] = [
   DonationStatus.REFUNDED,
 ];
 
+/** Divide "Nome Completo" em first/last name — a API do Mercado Pago exige os dois. */
+function splitName(fullName: string): { firstName: string; lastName: string } {
+  const parts = fullName.trim().split(/\s+/);
+  const firstName = parts[0] ?? fullName;
+  const lastName = parts.length > 1 ? parts.slice(1).join(" ") : firstName;
+  return { firstName, lastName };
+}
+
+type PixData = {
+  qrCode?: string;
+  qrCodeBase64?: string;
+  ticketUrl?: string;
+};
+
+function extractPixData(payment: { point_of_interaction?: unknown }): PixData {
+  const transactionData = (
+    payment.point_of_interaction as
+      | { transaction_data?: { qr_code?: string; qr_code_base64?: string; ticket_url?: string } }
+      | undefined
+  )?.transaction_data;
+  return {
+    qrCode: transactionData?.qr_code,
+    qrCodeBase64: transactionData?.qr_code_base64,
+    ticketUrl: transactionData?.ticket_url,
+  };
+}
+
 export const paymentsRoutes: FastifyPluginAsyncZod = async (app) => {
   const backendPublicUrl = process.env.BACKEND_PUBLIC_URL;
   if (!backendPublicUrl) {
     throw new Error("BACKEND_PUBLIC_URL não está definida.");
   }
   const notificationUrl = `${backendPublicUrl}/api/webhooks/mercadopago`;
-
-  const frontendUrl = process.env.FRONTEND_URL;
-  if (!frontendUrl) {
-    throw new Error("FRONTEND_URL não está definida.");
-  }
-  // Obrigatório pelo Mercado Pago quando `auto_return` é usado — sem
-  // `back_urls.success`, a API rejeita a criação da preferência com o erro
-  // `invalid_auto_return` ("back_url.success must be defined").
-  const backUrls = {
-    success: `${frontendUrl}/doacao/sucesso`,
-    pending: `${frontendUrl}/doacao/pendente`,
-    failure: `${frontendUrl}/doacao/erro`,
-  };
 
   await app.register(rateLimit, {
     max: 5,
@@ -100,54 +116,57 @@ export const paymentsRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       }
 
-      if (donation.mpPreferenceId && donation.mpInitPoint) {
-        return reply.status(201).send({
-          donationId: donation.id,
-          initPoint: donation.mpInitPoint,
-        });
+      const { firstName, lastName } = splitName(donorName);
+
+      if (donation.mpPaymentId) {
+        try {
+          const existingPayment = await paymentClient.get({ id: donation.mpPaymentId });
+          return reply.status(201).send({ donationId: donation.id, ...extractPixData(existingPayment) });
+        } catch (error) {
+          app.log.error(
+            { paymentId: donation.mpPaymentId, error: error instanceof Error ? error.message : String(error) },
+            "Falha ao reconsultar pagamento Pix existente no Mercado Pago",
+          );
+          return reply.status(502).send({
+            error: {
+              code: "PAYMENT_PROVIDER_ERROR",
+              message: "Não foi possível recuperar o pagamento. Tente novamente.",
+            },
+          });
+        }
       }
 
       try {
-        const preference = await preferenceClient.create({
+        const payment = await paymentClient.create({
           body: {
-            items: [
-              {
-                id: donation.id,
-                title: `Doação — ${campaign.title}`,
-                quantity: 1,
-                currency_id: "BRL",
-                unit_price: amount / 100,
-              },
-            ],
-            payer: { name: donorName, email: donorEmail },
+            transaction_amount: amount / 100,
+            description: `Doação — ${campaign.title}`,
+            payment_method_id: "pix",
+            payer: { email: donorEmail, first_name: firstName, last_name: lastName },
             external_reference: donation.id,
             notification_url: notificationUrl,
-            back_urls: backUrls,
-            auto_return: "approved",
           },
+          requestOptions: { idempotencyKey: donation.id },
         });
 
-        if (!preference.id || !preference.init_point) {
-          throw new Error("Resposta do Mercado Pago sem id/init_point.");
+        if (!payment.id) {
+          throw new Error("Resposta do Mercado Pago sem id de pagamento.");
         }
 
         await prisma.donation.update({
           where: { id: donation.id },
-          data: { mpPreferenceId: preference.id, mpInitPoint: preference.init_point },
+          data: { mpPaymentId: String(payment.id) },
         });
 
-        return reply.status(201).send({
-          donationId: donation.id,
-          initPoint: preference.init_point,
-        });
+        return reply.status(201).send({ donationId: donation.id, ...extractPixData(payment) });
       } catch (error) {
         if (error instanceof MercadoPagoError) {
           app.log.error(
             { status: error.status, message: error.message, causes: error.causes },
-            "Falha ao criar preferência no Mercado Pago",
+            "Falha ao criar pagamento Pix no Mercado Pago",
           );
         } else {
-          app.log.error(error, "Falha inesperada ao criar preferência no Mercado Pago");
+          app.log.error(error, "Falha inesperada ao criar pagamento Pix no Mercado Pago");
         }
 
         return reply.status(502).send({
@@ -157,6 +176,34 @@ export const paymentsRoutes: FastifyPluginAsyncZod = async (app) => {
           },
         });
       }
+    },
+  );
+
+  app.get(
+    "/api/donations/:id/status",
+    {
+      // Sobrescreve o limite de 5/min do registro acima — essa rota é feita
+      // pra ser consultada em polling (a cada poucos segundos) enquanto o
+      // doador aguarda a confirmação do Pix.
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      schema: {
+        params: z.object({ id: z.uuid() }),
+        response: {
+          200: donationStatusResponseSchema,
+          400: apiErrorResponseSchema,
+          404: apiErrorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const donation = await prisma.donation.findUnique({ where: { id }, select: { status: true } });
+      if (!donation) {
+        return reply.status(404).send({
+          error: { code: "DONATION_NOT_FOUND", message: "Doação não encontrada." },
+        });
+      }
+      return reply.status(200).send({ status: donation.status });
     },
   );
 };

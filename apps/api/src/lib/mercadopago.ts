@@ -1,4 +1,4 @@
-import { MercadoPagoConfig, Payment, Preference } from "mercadopago";
+import { MercadoPagoConfig, Payment } from "mercadopago";
 
 const accessToken = process.env.MP_ACCESS_TOKEN;
 
@@ -8,5 +8,4 @@ if (!accessToken) {
 
 const mercadoPagoConfig = new MercadoPagoConfig({ accessToken });
 
-export const preferenceClient = new Preference(mercadoPagoConfig);
 export const paymentClient = new Payment(mercadoPagoConfig);

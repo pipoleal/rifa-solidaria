@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/mercadopago.js", () => ({
-  preferenceClient: { create: vi.fn() },
   paymentClient: { get: vi.fn() },
 }));
 

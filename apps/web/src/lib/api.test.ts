@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, createPayment, getCampaign } from "./api";
+import { ApiError, createPayment, getCampaign, getDonationStatus } from "./api";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -61,23 +61,23 @@ describe("createPayment", () => {
     vi.unstubAllGlobals();
   });
 
-  it("retorna donationId e initPoint em caso de sucesso", async () => {
+  it("retorna donationId e dados do Pix em caso de sucesso", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse(201, {
         donationId: "123e4567-e89b-12d3-a456-426614174000",
-        initPoint: "https://mercadopago.com/checkout/abc",
+        qrCode: "00020126-copia-e-cola-fake",
       }),
     );
 
     const result = await createPayment(validPaymentInput);
-    expect(result.initPoint).toBe("https://mercadopago.com/checkout/abc");
+    expect(result.qrCode).toBe("00020126-copia-e-cola-fake");
   });
 
   it("envia o body serializado corretamente", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse(201, {
         donationId: "123e4567-e89b-12d3-a456-426614174000",
-        initPoint: "https://mercadopago.com/checkout/abc",
+        qrCode: "00020126-copia-e-cola-fake",
       }),
     );
 
@@ -106,5 +106,29 @@ describe("createPayment", () => {
   it("lança ApiError genérico quando a resposta de erro não tem o formato esperado", async () => {
     vi.mocked(fetch).mockResolvedValue(new Response("not json", { status: 500 }));
     await expect(createPayment(validPaymentInput)).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("getDonationStatus", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("retorna o status quando a API responde 200", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(200, { status: "APPROVED" }));
+    const result = await getDonationStatus("123e4567-e89b-12d3-a456-426614174000");
+    expect(result.status).toBe("APPROVED");
+  });
+
+  it("lança ApiError quando a doação não é encontrada", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(404, { error: { code: "DONATION_NOT_FOUND", message: "x" } }),
+    );
+    await expect(
+      getDonationStatus("123e4567-e89b-12d3-a456-426614174000"),
+    ).rejects.toMatchObject({ code: "DONATION_NOT_FOUND" });
   });
 });

@@ -15,11 +15,11 @@ vi.mock("../lib/prisma.js", async () => {
   return { prisma: fake.fakePrisma, __fake: fake };
 });
 vi.mock("../lib/mercadopago.js", () => ({
-  preferenceClient: { create: vi.fn() },
+  paymentClient: { create: vi.fn(), get: vi.fn() },
 }));
 
 const { buildApp } = await import("../app.js");
-const { preferenceClient } = await import("../lib/mercadopago.js");
+const { paymentClient } = await import("../lib/mercadopago.js");
 const { __fake: fake } = (await import("../lib/prisma.js")) as unknown as {
   __fake: ReturnType<typeof createFakePrisma>;
 };
@@ -39,10 +39,17 @@ function activeCampaign(overrides: Partial<Parameters<typeof fake.seedCampaign>[
   };
 }
 
-function fakePreferenceResponse(overrides: { id?: string; init_point?: string } = {}) {
+function fakePixPaymentResponse(overrides: { id?: number } & Record<string, unknown> = {}) {
   return {
-    id: "fake-preference-id",
-    init_point: "https://sandbox.mercadopago.com/checkout/fake",
+    id: 987654321,
+    status: "pending",
+    point_of_interaction: {
+      transaction_data: {
+        qr_code: "00020126580014br.gov.bcb.pix-fake-copia-e-cola",
+        qr_code_base64: "aWZha2VxcmNvZGU=",
+        ticket_url: "https://www.mercadopago.com.br/payments/fake/ticket",
+      },
+    },
     api_response: { status: 201, headers: ["", []] as [string, string[]] },
     ...overrides,
   };
@@ -143,8 +150,9 @@ describe("POST /api/payments/create", () => {
 
   beforeEach(async () => {
     fake.reset();
-    vi.mocked(preferenceClient.create).mockReset();
-    vi.mocked(preferenceClient.create).mockResolvedValue(fakePreferenceResponse());
+    vi.mocked(paymentClient.create).mockReset();
+    vi.mocked(paymentClient.get).mockReset();
+    vi.mocked(paymentClient.create).mockResolvedValue(fakePixPaymentResponse());
 
     app = buildApp();
     await app.ready();
@@ -154,7 +162,7 @@ describe("POST /api/payments/create", () => {
     await app.close();
   });
 
-  it("cria a doação e retorna donationId + initPoint (campanha ativa)", async () => {
+  it("cria a doação e retorna donationId + dados do Pix (campanha ativa)", async () => {
     const campaign = activeCampaign();
     fake.seedCampaign(campaign);
 
@@ -167,7 +175,8 @@ describe("POST /api/payments/create", () => {
     expect(response.statusCode).toBe(201);
     const body = response.json();
     expect(body.donationId).toBeTruthy();
-    expect(body.initPoint).toBe("https://sandbox.mercadopago.com/checkout/fake");
+    expect(body.qrCode).toBe("00020126580014br.gov.bcb.pix-fake-copia-e-cola");
+    expect(body.qrCodeBase64).toBe("aWZha2VxcmNvZGU=");
     expect(fake.countDonations()).toBe(1);
   });
 
@@ -200,6 +209,7 @@ describe("POST /api/payments/create", () => {
     const campaign = activeCampaign();
     fake.seedCampaign(campaign);
     const payload = validPayload({ campaignId: campaign.id });
+    vi.mocked(paymentClient.get).mockResolvedValue(fakePixPaymentResponse());
 
     const first = await app.inject({ method: "POST", url: "/api/payments/create", payload });
     const second = await app.inject({ method: "POST", url: "/api/payments/create", payload });
@@ -214,6 +224,7 @@ describe("POST /api/payments/create", () => {
     const campaign = activeCampaign();
     fake.seedCampaign(campaign);
     const payload = validPayload({ campaignId: campaign.id });
+    vi.mocked(paymentClient.get).mockResolvedValue(fakePixPaymentResponse());
 
     const [first, second] = await Promise.all([
       app.inject({ method: "POST", url: "/api/payments/create", payload }),
@@ -226,7 +237,7 @@ describe("POST /api/payments/create", () => {
     expect(fake.countDonations()).toBe(1);
   });
 
-  it("chama o Mercado Pago com external_reference, amount convertido e notification_url corretos, e salva mpPreferenceId/mpInitPoint", async () => {
+  it("chama o Mercado Pago com payment_method_id=pix, amount convertido, payer e notification_url corretos, e salva mpPaymentId", async () => {
     const campaign = activeCampaign();
     fake.seedCampaign(campaign);
 
@@ -238,42 +249,44 @@ describe("POST /api/payments/create", () => {
 
     const donationId = response.json().donationId as string;
 
-    expect(preferenceClient.create).toHaveBeenCalledTimes(1);
-    const callArgs = vi.mocked(preferenceClient.create).mock.calls[0]?.[0] as {
+    expect(paymentClient.create).toHaveBeenCalledTimes(1);
+    const callArgs = vi.mocked(paymentClient.create).mock.calls[0]?.[0] as {
       body: {
         external_reference?: string;
         notification_url?: string;
-        back_urls?: { success?: string; pending?: string; failure?: string };
-        auto_return?: string;
-        items: Array<{ unit_price: number; currency_id?: string }>;
+        payment_method_id?: string;
+        transaction_amount?: number;
+        payer?: { email?: string; first_name?: string; last_name?: string };
       };
+      requestOptions?: { idempotencyKey?: string };
     };
     expect(callArgs.body.external_reference).toBe(donationId);
     expect(callArgs.body.notification_url).toBe("http://localhost:3333/api/webhooks/mercadopago");
-    expect(callArgs.body.items[0]?.unit_price).toBe(25);
-    expect(callArgs.body.items[0]?.currency_id).toBe("BRL");
-    expect(callArgs.body.auto_return).toBe("approved");
-    expect(callArgs.body.back_urls).toEqual({
-      success: "http://localhost:3000/doacao/sucesso",
-      pending: "http://localhost:3000/doacao/pendente",
-      failure: "http://localhost:3000/doacao/erro",
+    expect(callArgs.body.payment_method_id).toBe("pix");
+    expect(callArgs.body.transaction_amount).toBe(25);
+    expect(callArgs.body.payer).toEqual({
+      email: "maria@example.com",
+      first_name: "Maria",
+      last_name: "da Silva",
     });
+    expect(callArgs.requestOptions?.idempotencyKey).toBe(donationId);
 
     const stored = fake.getDonation(donationId);
-    expect(stored?.mpPreferenceId).toBe("fake-preference-id");
-    expect(stored?.mpInitPoint).toBe("https://sandbox.mercadopago.com/checkout/fake");
+    expect(stored?.mpPaymentId).toBe("987654321");
   });
 
-  it("reutilização: reenviar o mesmo clientRequestId depois de já ter preference não chama o Mercado Pago de novo", async () => {
+  it("reutilização: reenviar o mesmo clientRequestId depois de já ter pagamento reconsulta em vez de criar outro", async () => {
     const campaign = activeCampaign();
     fake.seedCampaign(campaign);
     const payload = validPayload({ campaignId: campaign.id });
+    vi.mocked(paymentClient.get).mockResolvedValue(fakePixPaymentResponse());
 
     await app.inject({ method: "POST", url: "/api/payments/create", payload });
     const response = await app.inject({ method: "POST", url: "/api/payments/create", payload });
 
     expect(response.statusCode).toBe(201);
-    expect(preferenceClient.create).toHaveBeenCalledTimes(1);
+    expect(paymentClient.create).toHaveBeenCalledTimes(1);
+    expect(paymentClient.get).toHaveBeenCalledTimes(1);
   });
 
   it("situação terminal: Donation já concluída retorna 409 e não cria nova cobrança", async () => {
@@ -291,13 +304,13 @@ describe("POST /api/payments/create", () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json().error.code).toBe("DONATION_ALREADY_FINALIZED");
-    expect(preferenceClient.create).toHaveBeenCalledTimes(1); // só a 1ª chamada, antes do status terminal
+    expect(paymentClient.create).toHaveBeenCalledTimes(1); // só a 1ª chamada, antes do status terminal
   });
 
   it("falha do Mercado Pago: Donation continua PENDING e resposta é genérica (502 PAYMENT_PROVIDER_ERROR)", async () => {
     const campaign = activeCampaign();
     fake.seedCampaign(campaign);
-    vi.mocked(preferenceClient.create).mockRejectedValueOnce(
+    vi.mocked(paymentClient.create).mockRejectedValueOnce(
       new MercadoPagoError({ status: 500, message: "internal error", error: "server_error" }),
     );
     const payload = validPayload({ campaignId: campaign.id });
@@ -319,8 +332,7 @@ describe("POST /api/payments/create", () => {
     expect(fake.countDonations()).toBe(1);
     const stored = fake.getDonationByClientRequestId(payload.clientRequestId);
     expect(stored?.status).toBe("PENDING");
-    expect(stored?.mpPreferenceId).toBeNull();
-    expect(stored?.mpInitPoint).toBeNull();
+    expect(stored?.mpPaymentId).toBeNull();
   });
 
   it("segurança: o Access Token nunca aparece em nenhuma resposta", async () => {
@@ -334,7 +346,7 @@ describe("POST /api/payments/create", () => {
     });
     expect(ok.body).not.toContain("TEST-fake-access-token-for-tests");
 
-    vi.mocked(preferenceClient.create).mockRejectedValueOnce(
+    vi.mocked(paymentClient.create).mockRejectedValueOnce(
       new MercadoPagoError({ status: 401, message: "invalid token", error: "unauthorized" }),
     );
     const failed = await app.inject({
@@ -365,5 +377,51 @@ describe("POST /api/payments/create", () => {
     expect(statusCodes.slice(0, 5).every((code) => code === 201)).toBe(true);
     expect(statusCodes[5]).toBe(429);
     expect(responses[5]?.json().error.code).toBe("RATE_LIMITED");
+  });
+});
+
+describe("GET /api/donations/:id/status", () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+
+  beforeEach(async () => {
+    fake.reset();
+    app = buildApp();
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it("retorna o status atual da doação", async () => {
+    const campaign = activeCampaign();
+    fake.seedCampaign(campaign);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/payments/create",
+      payload: validPayload({ campaignId: campaign.id }),
+    });
+    const donationId = created.json().donationId as string;
+
+    const response = await app.inject({ method: "GET", url: `/api/donations/${donationId}/status` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: "PENDING" });
+  });
+
+  it("retorna 404 para doação inexistente", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/donations/${randomUUID()}/status`,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe("DONATION_NOT_FOUND");
+  });
+
+  it("retorna 400 para id que não é UUID", async () => {
+    const response = await app.inject({ method: "GET", url: "/api/donations/not-a-uuid/status" });
+
+    expect(response.statusCode).toBe(400);
   });
 });

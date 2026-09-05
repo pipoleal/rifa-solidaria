@@ -17,7 +17,6 @@ vi.mock("../lib/prisma.js", async () => {
   return { prisma: fake.fakePrisma, __fake: fake };
 });
 vi.mock("../lib/mercadopago.js", () => ({
-  preferenceClient: { create: vi.fn() },
   paymentClient: { get: vi.fn() },
 }));
 
