@@ -57,8 +57,17 @@ export const webhookRoutes: FastifyPluginAsyncZod = async (app) => {
         });
       } catch (error) {
         if (error instanceof InvalidWebhookSignatureError) {
+          // DIAGNÓSTICO TEMPORÁRIO — remover depois de identificar a causa do
+          // SignatureMismatch intermitente. Loga só o que o Mercado Pago
+          // envia (nunca o secret nem o hash computado).
           app.log.warn(
-            { reason: error.reason, requestId: error.requestId },
+            {
+              reason: error.reason,
+              requestId: error.requestId,
+              rawXSignature: request.headers["x-signature"],
+              rawXRequestId: request.headers["x-request-id"],
+              dataIdFromQuery,
+            },
             "Webhook do Mercado Pago com assinatura inválida",
           );
           return reply.status(401).send({
