@@ -32,7 +32,7 @@ function apiUrl(path: string): string {
 
 /** Busca a campanha ativa. Retorna `null` quando não há campanha ativa (404). */
 export async function getCampaign(): Promise<CampaignResponse | null> {
-  const response = await fetch(apiUrl("/api/campaign"), { next: { revalidate: 30 } });
+  const response = await fetch(apiUrl("/api/campaign"), { cache: "no-store" });
 
   if (response.status === 404) {
     return null;
